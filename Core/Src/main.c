@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -26,12 +27,54 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct {
+	// digital buttons, 0 = off, 1 = on, definitions below
+	uint16_t buttons;
 
+	// Direction value define below
+	uint8_t direction : 4;
+	// pad the byte out
+	uint8_t : 4;
+
+	// analogs --- left stick x/y, right stick x/y
+	uint8_t l_x_axis;
+	uint8_t l_y_axis;
+	uint8_t r_x_axis;
+	uint8_t r_y_axis;
+} FightpadReport;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+// HAT report (4 bits)
+#define HID_HAT_UP        0x00
+#define HID_HAT_UPRIGHT   0x01
+#define HID_HAT_RIGHT     0x02
+#define HID_HAT_DOWNRIGHT 0x03
+#define HID_HAT_DOWN      0x04
+#define HID_HAT_DOWNLEFT  0x05
+#define HID_HAT_LEFT      0x06
+#define HID_HAT_UPLEFT    0x07
+#define HID_HAT_NEUTRAL   0x08
 
+// Button Defines
+#define HID_BTN_B1 (1 << 0)
+#define HID_BTN_B2 (1 << 1)
+#define HID_BTN_B3 (1 << 2)
+#define HID_BTN_B4 (1 << 3)
+#define HID_BTN_L1 (1 << 4)
+#define HID_BTN_R1 (1 << 5)
+#define HID_BTN_L2 (1 << 6)
+#define HID_BTN_R2 (1 << 7)
+#define HID_BTN_S1 (1 << 8)
+#define HID_BTN_S2 (1 << 9)
+#define HID_BTN_L3 (1 << 10)
+#define HID_BTN_R3 (1 << 11)
+
+//Control stick axis values
+#define HID_AXIS_MIN 0x00
+#define HID_AXIS_MID 0x80
+#define HID_AXIS_MAX 0xFF
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -40,23 +83,71 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim6;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+volatile FightpadReport fightpadReport = {
+	.buttons = 0,
+	.direction = HID_HAT_NEUTRAL,
+	.l_x_axis = HID_AXIS_MID,
+	.l_y_axis = HID_AXIS_MID,
+	.r_x_axis = HID_AXIS_MID,
+	.r_y_axis = HID_AXIS_MID
+};
+extern USBD_HandleTypeDef hUsbDeviceFS;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
-
+void dpad(void);
+void updateButtons(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void dpad(void) {
+	uint8_t up = HAL_GPIO_ReadPin(BTN_UP_GPIO_Port, BTN_UP_Pin);
+	uint8_t down = HAL_GPIO_ReadPin(BTN_DOWN_GPIO_Port, BTN_DOWN_Pin);
+	uint8_t left = HAL_GPIO_ReadPin(BTN_LEFT_GPIO_Port, BTN_LEFT_Pin);
+	uint8_t right = HAL_GPIO_ReadPin(BTN_RIGHT_GPIO_Port, BTN_RIGHT_Pin);
 
+	// SOCD Neutral
+	if (up && down) { up = down = GPIO_PIN_RESET; }
+	if (left && right) { left = right = GPIO_PIN_RESET; }
+
+	if (up && right) { fightpadReport.direction = HID_HAT_UPRIGHT; fightpadReport.l_x_axis = HID_AXIS_MAX; fightpadReport.l_y_axis = HID_AXIS_MAX; }
+	else if (up && left) { fightpadReport.direction = HID_HAT_UPLEFT; fightpadReport.l_x_axis = HID_AXIS_MIN; fightpadReport.l_y_axis = HID_AXIS_MAX; }
+	else if (down && right) { fightpadReport.direction = HID_HAT_DOWNRIGHT; fightpadReport.l_x_axis = HID_AXIS_MAX; fightpadReport.l_y_axis = HID_AXIS_MIN; }
+	else if (down && left) { fightpadReport.direction = HID_HAT_DOWNLEFT; fightpadReport.l_x_axis = HID_AXIS_MIN; fightpadReport.l_y_axis = HID_AXIS_MIN; }
+	else if (up) { fightpadReport.direction = HID_HAT_UP; fightpadReport.l_x_axis = HID_AXIS_MID; fightpadReport.l_y_axis = HID_AXIS_MAX; }
+	else if (down) { fightpadReport.direction = HID_HAT_DOWN; fightpadReport.l_x_axis = HID_AXIS_MID; fightpadReport.l_y_axis = HID_AXIS_MIN; }
+	else if (right) { fightpadReport.direction = HID_HAT_RIGHT; fightpadReport.l_x_axis = HID_AXIS_MAX; fightpadReport.l_y_axis = HID_AXIS_MID; }
+	else if (left) { fightpadReport.direction = HID_HAT_LEFT; fightpadReport.l_x_axis = HID_AXIS_MIN; fightpadReport.l_y_axis = HID_AXIS_MID; }
+	else { fightpadReport.direction = HID_HAT_NEUTRAL; fightpadReport.l_x_axis = HID_AXIS_MID; fightpadReport.l_y_axis = HID_AXIS_MID; }
+}
+
+void updateButtons(void) {
+	fightpadReport.buttons = 0
+		| (HAL_GPIO_ReadPin(BTN_B1_GPIO_Port, BTN_B1_Pin) ? HID_BTN_B2 : 0)
+		| (HAL_GPIO_ReadPin(BTN_B2_GPIO_Port, BTN_B2_Pin) ? HID_BTN_B3 : 0)
+		| (HAL_GPIO_ReadPin(BTN_B3_GPIO_Port, BTN_B3_Pin) ? HID_BTN_B1 : 0)
+		| (HAL_GPIO_ReadPin(BTN_B4_GPIO_Port, BTN_B4_Pin) ? HID_BTN_B4 : 0)
+		| (HAL_GPIO_ReadPin(BTN_L1_GPIO_Port, BTN_L1_Pin) ? HID_BTN_L1 : 0)
+		| (HAL_GPIO_ReadPin(BTN_R1_GPIO_Port, BTN_R1_Pin) ? HID_BTN_R1 : 0)
+		| (HAL_GPIO_ReadPin(BTN_L2_GPIO_Port, BTN_L2_Pin) ? HID_BTN_L2 : 0)
+		| (HAL_GPIO_ReadPin(BTN_R2_GPIO_Port, BTN_R2_Pin) ? HID_BTN_R2 : 0)
+		| (HAL_GPIO_ReadPin(BTN_S1_GPIO_Port, BTN_S1_Pin) ? HID_BTN_S1 : 0)
+		| (HAL_GPIO_ReadPin(BTN_S2_GPIO_Port, BTN_S2_Pin) ? HID_BTN_S2 : 0)
+		| (HAL_GPIO_ReadPin(BTN_L3_GPIO_Port, BTN_L3_Pin) ? HID_BTN_L3 : 0)
+		| (HAL_GPIO_ReadPin(BTN_R3_GPIO_Port, BTN_R3_Pin) ? HID_BTN_R3 : 0)
+	;
+}
 /* USER CODE END 0 */
 
 /**
@@ -89,6 +180,8 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_USB_DEVICE_Init();
+  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -97,6 +190,12 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  dpad();
+	  updateButtons();
+
+	  // Send report
+	  USBD_HID_SendReport(&hUsbDeviceFS, (uint8_t *) &fightpadReport, 7);
+	  HAL_Delay(10);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -165,6 +264,44 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief TIM6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM6_Init(void)
+{
+
+  /* USER CODE BEGIN TIM6_Init 0 */
+
+  /* USER CODE END TIM6_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM6_Init 1 */
+
+  /* USER CODE END TIM6_Init 1 */
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 0;
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 65535;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM6_Init 2 */
+
+  /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -216,15 +353,23 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
+  /*Configure GPIO pins : BTN_L2_Pin BTN_UP_Pin BTN_DOWN_Pin BTN_RIGHT_Pin
+                           BTN_LEFT_Pin BTN_B1_Pin BTN_B4_Pin BTN_R1_Pin
+                           BTN_L1_Pin */
+  GPIO_InitStruct.Pin = BTN_L2_Pin|BTN_UP_Pin|BTN_DOWN_Pin|BTN_RIGHT_Pin
+                          |BTN_LEFT_Pin|BTN_B1_Pin|BTN_B4_Pin|BTN_R1_Pin
+                          |BTN_L1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD3_Pin */
-  GPIO_InitStruct.Pin = LD3_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD3_GPIO_Port, &GPIO_InitStruct);
+  /*Configure GPIO pins : BTN_B2_Pin BTN_B3_Pin BTN_R2_Pin BTN_S2_Pin
+                           BTN_S1_Pin BTN_R3_Pin BTN_L3_Pin */
+  GPIO_InitStruct.Pin = BTN_B2_Pin|BTN_B3_Pin|BTN_R2_Pin|BTN_S2_Pin
+                          |BTN_S1_Pin|BTN_R3_Pin|BTN_L3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
