@@ -97,6 +97,7 @@ volatile FightpadReport fightpadReport = {
 	.r_y_axis = HID_AXIS_MID
 };
 extern USBD_HandleTypeDef hUsbDeviceFS;
+volatile uint8_t hidReportDelay = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -183,7 +184,7 @@ int main(void)
   MX_USB_DEVICE_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_TIM_Base_Start_IT(&htim6);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -194,8 +195,9 @@ int main(void)
 	  updateButtons();
 
 	  // Send report
+	  while (!hidReportDelay);
 	  USBD_HID_SendReport(&hUsbDeviceFS, (uint8_t *) &fightpadReport, 7);
-	  HAL_Delay(10);
+	  hidReportDelay = 0;
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -281,9 +283,9 @@ static void MX_TIM6_Init(void)
 
   /* USER CODE END TIM6_Init 1 */
   htim6.Instance = TIM6;
-  htim6.Init.Prescaler = 0;
+  htim6.Init.Prescaler = 32-1;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 65535;
+  htim6.Init.Period = 1000-1;
   htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
@@ -377,7 +379,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+	if (htim == &htim6) {
+		hidReportDelay = 1;
+	}
 
+}
 /* USER CODE END 4 */
 
 /**
